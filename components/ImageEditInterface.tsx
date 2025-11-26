@@ -22,8 +22,8 @@ export const ImageEditInterface: React.FC = () => {
           const canvas = document.createElement('canvas');
           let width = img.width;
           let height = img.height;
-          // Reduced to 800px to ensure better success rate on free tier and prevent RPC errors
-          const MAX_SIZE = 800;
+          // Reduced to 512px to ensure best success rate on free tier and prevent RPC/Quota errors
+          const MAX_SIZE = 512;
 
           if (width > MAX_SIZE || height > MAX_SIZE) {
             const ratio = Math.min(MAX_SIZE / width, MAX_SIZE / height);
@@ -40,9 +40,9 @@ export const ImageEditInterface: React.FC = () => {
           }
           ctx.drawImage(img, 0, 0, width, height);
           
-          // Use JPEG for efficiency unless strictly PNG. Quality 0.85 is a good balance.
+          // Use JPEG for efficiency unless strictly PNG. Quality 0.7 is efficient for AI edits.
           const outputType = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
-          const dataUrl = canvas.toDataURL(outputType, 0.85);
+          const dataUrl = canvas.toDataURL(outputType, 0.7);
           resolve(dataUrl.split(',')[1]);
         };
         img.onerror = (err) => reject(err);

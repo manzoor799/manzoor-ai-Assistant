@@ -30,7 +30,7 @@ async function withRetry<T>(
       const isServer = msg.includes('503') || msg.includes('500') || msg.includes('Overloaded');
 
       if ((isQuota || isServer) && i < maxRetries - 1) {
-        const delay = initialDelay * Math.pow(2, i); // e.g. 4000, 8000, 16000 ms
+        const delay = initialDelay * Math.pow(2, i); // e.g. 5000, 10000, 20000 ms
         console.warn(`Attempt ${i + 1} failed with ${isQuota ? 'quota' : 'server'} error. Retrying in ${delay}ms...`);
         await wait(delay);
         continue;
@@ -41,7 +41,7 @@ async function withRetry<T>(
     }
   }
   throw lastError;
-}
+};
 
 // Helper to parse ugly API errors into human readable text
 const parseGeminiError = (err: any): string => {
@@ -154,13 +154,13 @@ export const editImage = async (imageBase64: string, imageMimeType: string, prom
   };
 
   try {
-    // Attempt 1: Gemini 2.5 Flash Image with Retry. Start with 4s delay to allow bucket refill.
-    return await withRetry(() => callModel('gemini-2.5-flash-image'), 3, 4000);
+    // Attempt 1: Gemini 2.5 Flash Image with Retry. Increase retries to 5 and delay to 5s.
+    return await withRetry(() => callModel('gemini-2.5-flash-image'), 5, 5000);
   } catch (error: any) {
     console.warn("Gemini 2.5 Flash Image failed after retries, switching to Gemini 3 Pro...", error);
     try {
-      // Attempt 2: Gemini 3 Pro Image Preview with Retry. Start with 5s delay.
-      return await withRetry(() => callModel('gemini-3-pro-image-preview'), 3, 5000);
+      // Attempt 2: Gemini 3 Pro Image Preview with Retry. Increase retries to 5 and delay to 5s.
+      return await withRetry(() => callModel('gemini-3-pro-image-preview'), 5, 5000);
     } catch (finalError) {
       throw new Error(parseGeminiError(finalError));
     }
