@@ -7,12 +7,48 @@ const getClient = () => {
   return new GoogleGenAI({ apiKey });
 };
 
+// Utility: Wait for a specified number of milliseconds
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Utility: Retry an async operation with exponential backoff
+async function withRetry<T>(
+  operation: () => Promise<T>, 
+  maxRetries: number = 3, 
+  initialDelay: number = 2000
+): Promise<T> {
+  let lastError: any;
+  
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await operation();
+    } catch (err: any) {
+      lastError = err;
+      const msg = err.message || err.toString();
+      
+      // Check for retryable errors: 429 (Quota), 503 (Service Unavailable), 500 (Server Error)
+      const isQuota = msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota');
+      const isServer = msg.includes('503') || msg.includes('500') || msg.includes('Overloaded');
+
+      if ((isQuota || isServer) && i < maxRetries - 1) {
+        const delay = initialDelay * Math.pow(2, i); // 2000, 4000, 8000 ms
+        console.warn(`Attempt ${i + 1} failed with ${isQuota ? 'quota' : 'server'} error. Retrying in ${delay}ms...`);
+        await wait(delay);
+        continue;
+      }
+      
+      // If it's not retryable (e.g. Safety, Invalid Argument), throw immediately
+      throw err;
+    }
+  }
+  throw lastError;
+}
+
 // Helper to parse ugly API errors into human readable text
 const parseGeminiError = (err: any): string => {
   const msg = err.message || err.toString();
   
   if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota')) {
-    return "Usage limit exceeded. Free tier quota reached. Please wait a minute or try again.";
+    return "Usage limit exceeded. The system is busy, please try again in a moment.";
   }
   if (msg.includes('500') || msg.includes('Rpc failed') || msg.includes('xhr error')) {
     return "Network error or image too large. Please try a smaller image.";
@@ -21,7 +57,6 @@ const parseGeminiError = (err: any): string => {
     return "The request was blocked due to safety settings.";
   }
 
-  // Try to extract clean message from JSON dump
   try {
     const jsonMatch = msg.match(/\{.*"message":\s*"([^"]+)".*\}/);
     if (jsonMatch && jsonMatch[1]) {
@@ -32,7 +67,7 @@ const parseGeminiError = (err: any): string => {
   return "An error occurred. Please try again.";
 };
 
-// 1. Chat with Manzoor (Gemini 3 Pro -> Fallback to 2.5 Flash)
+// 1. Chat with Manzoor (Gemini 3 Pro -> Retry -> Fallback to 2.5 Flash -> Retry)
 export const chatWithManzoor = async (history: ChatMessage[], newMessage: string, imageBase64?: string, imageMimeType: string = 'image/jpeg'): Promise<string> => {
   const ai = getClient();
   const systemInstruction = "You are an AI assistant named Manzoor. Your father's name is Abdul Razak. You primarily speak Urdu, but can understand English. Be polite, helpful, and respectful. Use the Urdu script for Urdu responses.";
@@ -48,46 +83,48 @@ export const chatWithManzoor = async (history: ChatMessage[], newMessage: string
     ? [{ inlineData: { mimeType: imageMimeType, data: imageBase64 } }, { text: newMessage }]
     : newMessage;
 
-  // Try Primary Model (Gemini 3 Pro)
-  try {
+  // Define operation for Gemini 3 Pro
+  const callPro = async () => {
     const chat = ai.chats.create({
       model: 'gemini-3-pro-preview',
       config: { systemInstruction },
       history: historyContent
     });
-    
     const response: GenerateContentResponse = await chat.sendMessage({ message: msgParam as any });
     return response.text || "";
+  };
+
+  // Define operation for Gemini 2.5 Flash
+  const callFlash = async () => {
+    const chat = ai.chats.create({
+      model: 'gemini-2.5-flash',
+      config: { systemInstruction },
+      history: historyContent
+    });
+    const response: GenerateContentResponse = await chat.sendMessage({ message: msgParam as any });
+    return response.text || "";
+  };
+
+  try {
+    // Try Pro with retries
+    return await withRetry(callPro, 3, 2000);
   } catch (err: any) {
-    // If Quota Exceeded or Server Error, Fallback to Gemini 2.5 Flash
-    const isQuotaError = err.message?.includes('429') || err.message?.includes('RESOURCE_EXHAUSTED');
-    const isServerError = err.message?.includes('503') || err.message?.includes('500');
-
-    if (isQuotaError || isServerError) {
-      console.warn("Gemini 3 Pro failed, falling back to Gemini 2.5 Flash...");
-      try {
-        const fallbackChat = ai.chats.create({
-          model: 'gemini-2.5-flash', // Fallback model
-          config: { systemInstruction },
-          history: historyContent
-        });
-        const response: GenerateContentResponse = await fallbackChat.sendMessage({ message: msgParam as any });
-        return response.text || "";
-      } catch (fallbackErr: any) {
-        throw new Error(parseGeminiError(fallbackErr));
-      }
+    console.warn("Gemini 3 Pro failed after retries, switching to Flash...", err);
+    try {
+      // Fallback to Flash with retries
+      return await withRetry(callFlash, 3, 2000);
+    } catch (fallbackErr: any) {
+      throw new Error(parseGeminiError(fallbackErr));
     }
-
-    throw new Error(parseGeminiError(err));
   }
 };
 
-// 2. Edit Image (Gemini 2.5 Flash Image -> Fallback to 3.0 Pro Image)
+// 2. Edit Image (Gemini 2.5 Flash Image -> Retry -> Fallback to 3.0 Pro Image -> Retry)
 export const editImage = async (imageBase64: string, imageMimeType: string, prompt: string): Promise<{ image?: string, text?: string }> => {
   const ai = getClient();
 
   const callModel = async (modelName: string) => {
-    return await ai.models.generateContent({
+    const response = await ai.models.generateContent({
       model: modelName,
       contents: {
         parts: [
@@ -96,26 +133,6 @@ export const editImage = async (imageBase64: string, imageMimeType: string, prom
         ]
       }
     });
-  };
-
-  try {
-    let response: GenerateContentResponse;
-    
-    // Attempt 1: Gemini 2.5 Flash Image ("Nano Banana")
-    try {
-      response = await callModel('gemini-2.5-flash-image');
-    } catch (error: any) {
-      const isQuota = error.message?.includes('429') || error.message?.includes('RESOURCE_EXHAUSTED');
-      const isServer = error.message?.includes('500') || error.message?.includes('503');
-      
-      if (isQuota || isServer) {
-        console.warn("Gemini 2.5 Flash Image quota exceeded, switching to Gemini 3 Pro Image...");
-        // Attempt 2: Gemini 3 Pro Image Preview
-        response = await callModel('gemini-3-pro-image-preview');
-      } else {
-        throw error;
-      }
-    }
 
     let resultImage: string | undefined;
     let resultText: string | undefined;
@@ -131,19 +148,30 @@ export const editImage = async (imageBase64: string, imageMimeType: string, prom
     }
 
     if (!resultImage && !resultText) {
-        throw new Error("The model could not generate an edited image. Please try a different prompt.");
+        throw new Error("The model returned an empty response.");
     }
-
     return { image: resultImage, text: resultText };
-  } catch (err) {
-    throw new Error(parseGeminiError(err));
+  };
+
+  try {
+    // Attempt 1: Gemini 2.5 Flash Image with Retry
+    return await withRetry(() => callModel('gemini-2.5-flash-image'), 3, 2000);
+  } catch (error: any) {
+    console.warn("Gemini 2.5 Flash Image failed after retries, switching to Gemini 3 Pro...", error);
+    try {
+      // Attempt 2: Gemini 3 Pro Image Preview with Retry
+      return await withRetry(() => callModel('gemini-3-pro-image-preview'), 3, 2000);
+    } catch (finalError) {
+      throw new Error(parseGeminiError(finalError));
+    }
   }
 };
 
-// 3. Transcribe Audio (Gemini 2.5 Flash)
+// 3. Transcribe Audio (Gemini 2.5 Flash -> Retry)
 export const transcribeAudio = async (audioBase64: string, mimeType: string): Promise<string> => {
   const ai = getClient();
-  try {
+  
+  const callTranscribe = async () => {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: {
@@ -154,15 +182,20 @@ export const transcribeAudio = async (audioBase64: string, mimeType: string): Pr
       }
     });
     return response.text || "";
+  };
+
+  try {
+    return await withRetry(callTranscribe, 3, 2000);
   } catch (err) {
     throw new Error(parseGeminiError(err));
   }
 };
 
-// 4. Text to Speech (Gemini 2.5 Flash TTS)
+// 4. Text to Speech (Gemini 2.5 Flash TTS -> Retry)
 export const generateSpeech = async (text: string): Promise<string> => {
   const ai = getClient();
-  try {
+  
+  const callTTS = async () => {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-preview-tts',
       contents: [{ parts: [{ text }] }],
@@ -179,6 +212,10 @@ export const generateSpeech = async (text: string): Promise<string> => {
     const audioData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
     if (!audioData) throw new Error("No audio data returned");
     return audioData;
+  };
+
+  try {
+    return await withRetry(callTTS, 3, 2000);
   } catch (err) {
     throw new Error(parseGeminiError(err));
   }
