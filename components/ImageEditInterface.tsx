@@ -22,7 +22,8 @@ export const ImageEditInterface: React.FC = () => {
           const canvas = document.createElement('canvas');
           let width = img.width;
           let height = img.height;
-          const MAX_SIZE = 1024; // Limit to 1024px to prevent "Rpc failed due to xhr error"
+          // Reduced to 800px to ensure better success rate on free tier and prevent RPC errors
+          const MAX_SIZE = 800;
 
           if (width > MAX_SIZE || height > MAX_SIZE) {
             const ratio = Math.min(MAX_SIZE / width, MAX_SIZE / height);
@@ -153,6 +154,7 @@ export const ImageEditInterface: React.FC = () => {
                      <div className="text-center text-gray-400 animate-pulse">
                          <div className="w-12 h-12 bg-gray-200 rounded-full mx-auto mb-3"></div>
                          <p>Generating magic...</p>
+                         <p className="text-xs text-gray-300 mt-2">This may take a few seconds...</p>
                      </div>
                  ) : (
                      <p className="text-gray-400 text-sm">Edited image will appear here</p>
