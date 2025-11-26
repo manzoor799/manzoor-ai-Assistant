@@ -12,7 +12,7 @@ const parseGeminiError = (err: any): string => {
   const msg = err.message || err.toString();
   
   if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota')) {
-    return "Usage limit exceeded. Please try again in a moment.";
+    return "Usage limit exceeded. Free tier quota reached. Please wait a minute or try again.";
   }
   if (msg.includes('500') || msg.includes('Rpc failed') || msg.includes('xhr error')) {
     return "Network error or image too large. Please try a smaller image.";
@@ -82,12 +82,13 @@ export const chatWithManzoor = async (history: ChatMessage[], newMessage: string
   }
 };
 
-// 2. Edit Image (Gemini 2.5 Flash Image - "Nano Banana")
+// 2. Edit Image (Gemini 2.5 Flash Image -> Fallback to 3.0 Pro Image)
 export const editImage = async (imageBase64: string, imageMimeType: string, prompt: string): Promise<{ image?: string, text?: string }> => {
   const ai = getClient();
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image',
+
+  const callModel = async (modelName: string) => {
+    return await ai.models.generateContent({
+      model: modelName,
       contents: {
         parts: [
           { inlineData: { mimeType: imageMimeType, data: imageBase64 } },
@@ -95,6 +96,26 @@ export const editImage = async (imageBase64: string, imageMimeType: string, prom
         ]
       }
     });
+  };
+
+  try {
+    let response: GenerateContentResponse;
+    
+    // Attempt 1: Gemini 2.5 Flash Image ("Nano Banana")
+    try {
+      response = await callModel('gemini-2.5-flash-image');
+    } catch (error: any) {
+      const isQuota = error.message?.includes('429') || error.message?.includes('RESOURCE_EXHAUSTED');
+      const isServer = error.message?.includes('500') || error.message?.includes('503');
+      
+      if (isQuota || isServer) {
+        console.warn("Gemini 2.5 Flash Image quota exceeded, switching to Gemini 3 Pro Image...");
+        // Attempt 2: Gemini 3 Pro Image Preview
+        response = await callModel('gemini-3-pro-image-preview');
+      } else {
+        throw error;
+      }
+    }
 
     let resultImage: string | undefined;
     let resultText: string | undefined;
