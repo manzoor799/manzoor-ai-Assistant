@@ -61,6 +61,7 @@ export const ImageEditInterface: React.FC = () => {
         setOriginalMimeType(file.type === 'image/png' ? 'image/png' : 'image/jpeg');
         setResultImage(null);
         setResultText(null);
+        setStatus({ isLoading: false, error: null });
       } catch (err) {
         console.error("Image processing error:", err);
         setStatus({ isLoading: false, error: "Failed to process image. Please try another." });
@@ -79,7 +80,7 @@ export const ImageEditInterface: React.FC = () => {
       if (!image && !text) throw new Error("No changes returned from model.");
     } catch (err: any) {
       console.error(err);
-      setStatus({ isLoading: false, error: err.message || "An error occurred during generation." });
+      setStatus({ isLoading: false, error: err.message });
     } finally {
       setStatus(prev => ({ ...prev, isLoading: false }));
     }
@@ -132,7 +133,11 @@ export const ImageEditInterface: React.FC = () => {
               )}
             </button>
           </div>
-          {status.error && <p className="text-red-500 text-sm bg-red-50 p-2 rounded">{status.error}</p>}
+          {status.error && (
+            <div className="p-4 mb-4 text-sm text-red-800 rounded-lg bg-red-50 border border-red-200" role="alert">
+              <span className="font-medium">Error:</span> {status.error}
+            </div>
+          )}
         </div>
 
         {/* Result Side */}

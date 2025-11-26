@@ -18,7 +18,7 @@ export const ChatInterface: React.FC = () => {
 
   useEffect(() => {
     scrollToBottom();
-  }, [history]);
+  }, [history, status.isLoading, status.error]);
 
   const handleSend = async () => {
     if ((!input.trim() && !selectedImage) || status.isLoading) return;
@@ -55,7 +55,8 @@ export const ChatInterface: React.FC = () => {
       const responseText = await chatWithManzoor(history, userText, imageBase64, imageMimeType);
       setHistory(prev => [...prev, { role: 'model', text: responseText }]);
     } catch (err: any) {
-      setStatus({ isLoading: false, error: err.message || "Failed to get response" });
+      // The service now returns a clean error message string, so we can display it directly
+      setStatus({ isLoading: false, error: err.message });
     } finally {
       setStatus(prev => ({ ...prev, isLoading: false }));
     }
@@ -73,7 +74,7 @@ export const ChatInterface: React.FC = () => {
       <div className="bg-indigo-600 p-4 text-white flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold font-urdu">منظور (Manzoor)</h2>
-          <p className="text-xs opacity-80">AI Assistant (Gemini 3 Pro)</p>
+          <p className="text-xs opacity-80">AI Assistant (Gemini 3 Pro / 2.5 Flash)</p>
         </div>
       </div>
 
@@ -115,8 +116,17 @@ export const ChatInterface: React.FC = () => {
           </div>
         )}
         {status.error && (
-          <div className="text-center text-red-500 text-sm p-2 bg-red-50 rounded">
-            Error: {status.error}
+          <div className="mx-auto max-w-lg p-4 mb-4 text-red-800 border border-red-200 rounded-lg bg-red-50" role="alert">
+            <div className="flex items-center">
+              <svg className="flex-shrink-0 w-4 h-4 mr-2" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M10 .5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 10 .5ZM9.5 4a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3ZM12 15H8a1 1 0 0 1 0-2h1v-3H8a1 1 0 0 1 0-2h2a1 1 0 0 1 1 1v4h1a1 1 0 0 1 0 2Z"/>
+              </svg>
+              <span className="sr-only">Error</span>
+              <h3 className="text-sm font-medium">Unable to complete request</h3>
+            </div>
+            <div className="mt-2 mb-2 text-sm">
+              {status.error}
+            </div>
           </div>
         )}
         <div ref={messagesEndRef} />

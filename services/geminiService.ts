@@ -7,95 +7,158 @@ const getClient = () => {
   return new GoogleGenAI({ apiKey });
 };
 
-// 1. Chat with Manzoor (Gemini 3 Pro)
+// Helper to parse ugly API errors into human readable text
+const parseGeminiError = (err: any): string => {
+  const msg = err.message || err.toString();
+  
+  if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota')) {
+    return "Usage limit exceeded. Please try again in a moment.";
+  }
+  if (msg.includes('500') || msg.includes('Rpc failed') || msg.includes('xhr error')) {
+    return "Network error or image too large. Please try a smaller image.";
+  }
+  if (msg.includes('SAFETY')) {
+    return "The request was blocked due to safety settings.";
+  }
+
+  // Try to extract clean message from JSON dump
+  try {
+    const jsonMatch = msg.match(/\{.*"message":\s*"([^"]+)".*\}/);
+    if (jsonMatch && jsonMatch[1]) {
+        return jsonMatch[1];
+    }
+  } catch (e) {}
+
+  return "An error occurred. Please try again.";
+};
+
+// 1. Chat with Manzoor (Gemini 3 Pro -> Fallback to 2.5 Flash)
 export const chatWithManzoor = async (history: ChatMessage[], newMessage: string, imageBase64?: string, imageMimeType: string = 'image/jpeg'): Promise<string> => {
   const ai = getClient();
   const systemInstruction = "You are an AI assistant named Manzoor. Your father's name is Abdul Razak. You primarily speak Urdu, but can understand English. Be polite, helpful, and respectful. Use the Urdu script for Urdu responses.";
   
-  // We construct the chat history manually for the stateless call or use chats.create
-  // For simplicity with history + image capabilities, we'll use a chat session.
-  const chat = ai.chats.create({
-    model: 'gemini-3-pro-preview',
-    config: { systemInstruction },
-    history: history.map(h => ({
-      role: h.role,
-      parts: h.image 
-        ? [{ inlineData: { mimeType: h.imageMimeType || 'image/jpeg', data: h.image } }, { text: h.text }] 
-        : [{ text: h.text }]
-    }))
-  });
+  const historyContent = history.map(h => ({
+    role: h.role,
+    parts: h.image 
+      ? [{ inlineData: { mimeType: h.imageMimeType || 'image/jpeg', data: h.image } }, { text: h.text }] 
+      : [{ text: h.text }]
+  }));
 
-  // sendMessage accepts a string or a Part array.
   const msgParam = imageBase64 
     ? [{ inlineData: { mimeType: imageMimeType, data: imageBase64 } }, { text: newMessage }]
     : newMessage;
 
-  const response: GenerateContentResponse = await chat.sendMessage({ message: msgParam as any });
-  return response.text || "";
+  // Try Primary Model (Gemini 3 Pro)
+  try {
+    const chat = ai.chats.create({
+      model: 'gemini-3-pro-preview',
+      config: { systemInstruction },
+      history: historyContent
+    });
+    
+    const response: GenerateContentResponse = await chat.sendMessage({ message: msgParam as any });
+    return response.text || "";
+  } catch (err: any) {
+    // If Quota Exceeded or Server Error, Fallback to Gemini 2.5 Flash
+    const isQuotaError = err.message?.includes('429') || err.message?.includes('RESOURCE_EXHAUSTED');
+    const isServerError = err.message?.includes('503') || err.message?.includes('500');
+
+    if (isQuotaError || isServerError) {
+      console.warn("Gemini 3 Pro failed, falling back to Gemini 2.5 Flash...");
+      try {
+        const fallbackChat = ai.chats.create({
+          model: 'gemini-2.5-flash', // Fallback model
+          config: { systemInstruction },
+          history: historyContent
+        });
+        const response: GenerateContentResponse = await fallbackChat.sendMessage({ message: msgParam as any });
+        return response.text || "";
+      } catch (fallbackErr: any) {
+        throw new Error(parseGeminiError(fallbackErr));
+      }
+    }
+
+    throw new Error(parseGeminiError(err));
+  }
 };
 
 // 2. Edit Image (Gemini 2.5 Flash Image - "Nano Banana")
 export const editImage = async (imageBase64: string, imageMimeType: string, prompt: string): Promise<{ image?: string, text?: string }> => {
   const ai = getClient();
-  // Using generateContent for image editing as per guidelines for Nano Banana
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash-image',
-    contents: {
-      parts: [
-        { inlineData: { mimeType: imageMimeType, data: imageBase64 } },
-        { text: prompt }
-      ]
-    }
-  });
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: {
+        parts: [
+          { inlineData: { mimeType: imageMimeType, data: imageBase64 } },
+          { text: prompt }
+        ]
+      }
+    });
 
-  let resultImage: string | undefined;
-  let resultText: string | undefined;
+    let resultImage: string | undefined;
+    let resultText: string | undefined;
 
-  if (response.candidates && response.candidates[0].content && response.candidates[0].content.parts) {
-    for (const part of response.candidates[0].content.parts) {
-      if (part.inlineData) {
-        resultImage = part.inlineData.data;
-      } else if (part.text) {
-        resultText = part.text;
+    if (response.candidates && response.candidates[0].content && response.candidates[0].content.parts) {
+      for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData) {
+          resultImage = part.inlineData.data;
+        } else if (part.text) {
+          resultText = part.text;
+        }
       }
     }
-  }
 
-  return { image: resultImage, text: resultText };
+    if (!resultImage && !resultText) {
+        throw new Error("The model could not generate an edited image. Please try a different prompt.");
+    }
+
+    return { image: resultImage, text: resultText };
+  } catch (err) {
+    throw new Error(parseGeminiError(err));
+  }
 };
 
 // 3. Transcribe Audio (Gemini 2.5 Flash)
 export const transcribeAudio = async (audioBase64: string, mimeType: string): Promise<string> => {
   const ai = getClient();
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
-    contents: {
-      parts: [
-        { inlineData: { mimeType: mimeType, data: audioBase64 } },
-        { text: "Please transcribe this audio accurately. If it is in Urdu, provide the transcription in Urdu script." }
-      ]
-    }
-  });
-  return response.text || "";
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: {
+        parts: [
+          { inlineData: { mimeType: mimeType, data: audioBase64 } },
+          { text: "Please transcribe this audio accurately. If it is in Urdu, provide the transcription in Urdu script." }
+        ]
+      }
+    });
+    return response.text || "";
+  } catch (err) {
+    throw new Error(parseGeminiError(err));
+  }
 };
 
 // 4. Text to Speech (Gemini 2.5 Flash TTS)
 export const generateSpeech = async (text: string): Promise<string> => {
   const ai = getClient();
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash-preview-tts',
-    contents: [{ parts: [{ text }] }],
-    config: {
-      responseModalities: [Modality.AUDIO],
-      speechConfig: {
-        voiceConfig: {
-          prebuiltVoiceConfig: { voiceName: 'Zephyr' } // Using a neutral voice, user prompt asked for Urdu support which this model should handle via text language detection
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-preview-tts',
+      contents: [{ parts: [{ text }] }],
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName: 'Zephyr' }
+          }
         }
       }
-    }
-  });
+    });
 
-  const audioData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-  if (!audioData) throw new Error("No audio data returned");
-  return audioData;
+    const audioData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    if (!audioData) throw new Error("No audio data returned");
+    return audioData;
+  } catch (err) {
+    throw new Error(parseGeminiError(err));
+  }
 };
