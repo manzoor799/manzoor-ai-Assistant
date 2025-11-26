@@ -67,10 +67,20 @@ const parseGeminiError = (err: any): string => {
   return "An error occurred. Please try again.";
 };
 
-// 1. Chat with Manzoor (Gemini 3 Pro -> Retry -> Fallback to 2.5 Flash -> Retry)
+// 1. Chat with Manzoor (Default Persona)
 export const chatWithManzoor = async (history: ChatMessage[], newMessage: string, imageBase64?: string, imageMimeType: string = 'image/jpeg'): Promise<string> => {
+  return chatWithPersona(
+    history, 
+    newMessage, 
+    "You are an AI assistant named Manzoor. Your father's name is Abdul Razak. You primarily speak Urdu, but can understand English. Be polite, helpful, and respectful. Use the Urdu script for Urdu responses.",
+    imageBase64,
+    imageMimeType
+  );
+};
+
+// 2. Chat with Persona (Specialized System Instruction)
+export const chatWithPersona = async (history: ChatMessage[], newMessage: string, systemInstruction: string, imageBase64?: string, imageMimeType: string = 'image/jpeg'): Promise<string> => {
   const ai = getClient();
-  const systemInstruction = "You are an AI assistant named Manzoor. Your father's name is Abdul Razak. You primarily speak Urdu, but can understand English. Be polite, helpful, and respectful. Use the Urdu script for Urdu responses.";
   
   const historyContent = history.map(h => ({
     role: h.role,
@@ -83,7 +93,6 @@ export const chatWithManzoor = async (history: ChatMessage[], newMessage: string
     ? [{ inlineData: { mimeType: imageMimeType, data: imageBase64 } }, { text: newMessage }]
     : newMessage;
 
-  // Define operation for Gemini 3 Pro
   const callPro = async () => {
     const chat = ai.chats.create({
       model: 'gemini-3-pro-preview',
@@ -94,7 +103,6 @@ export const chatWithManzoor = async (history: ChatMessage[], newMessage: string
     return response.text || "";
   };
 
-  // Define operation for Gemini 2.5 Flash
   const callFlash = async () => {
     const chat = ai.chats.create({
       model: 'gemini-2.5-flash',
@@ -106,12 +114,10 @@ export const chatWithManzoor = async (history: ChatMessage[], newMessage: string
   };
 
   try {
-    // Try Pro with retries
     return await withRetry(callPro, 3, 2000);
   } catch (err: any) {
-    console.warn("Gemini 3 Pro failed after retries, switching to Flash...", err);
+    console.warn("Pro failed, switching to Flash...", err);
     try {
-      // Fallback to Flash with retries
       return await withRetry(callFlash, 3, 2000);
     } catch (fallbackErr: any) {
       throw new Error(parseGeminiError(fallbackErr));
@@ -119,7 +125,35 @@ export const chatWithManzoor = async (history: ChatMessage[], newMessage: string
   }
 };
 
-// 2. Edit Image (Gemini 2.5 Flash Image -> Retry -> Fallback to 3.0 Pro Image -> Retry)
+// 3. Analyze Image (Vision Task - Crop Doctor, Doc Scanner)
+export const analyzeImage = async (imageBase64: string, mimeType: string, prompt: string, systemInstruction: string): Promise<string> => {
+  const ai = getClient();
+
+  const callVision = async () => {
+    // gemini-2.5-flash is excellent for multimodal understanding
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: {
+        parts: [
+          { inlineData: { mimeType: mimeType, data: imageBase64 } },
+          { text: prompt }
+        ]
+      },
+      config: {
+        systemInstruction
+      }
+    });
+    return response.text || "";
+  };
+
+  try {
+    return await withRetry(callVision, 3, 2000);
+  } catch (err) {
+    throw new Error(parseGeminiError(err));
+  }
+};
+
+// 4. Edit Image (Gemini 2.5 Flash Image -> Retry -> Fallback to 3.0 Pro Image -> Retry)
 export const editImage = async (imageBase64: string, imageMimeType: string, prompt: string): Promise<{ image?: string, text?: string }> => {
   const ai = getClient();
 
@@ -154,12 +188,10 @@ export const editImage = async (imageBase64: string, imageMimeType: string, prom
   };
 
   try {
-    // Attempt 1: Gemini 2.5 Flash Image with Retry. Increase retries to 5 and delay to 5s.
     return await withRetry(() => callModel('gemini-2.5-flash-image'), 5, 5000);
   } catch (error: any) {
-    console.warn("Gemini 2.5 Flash Image failed after retries, switching to Gemini 3 Pro...", error);
+    console.warn("Gemini 2.5 Flash Image failed, switching to 3 Pro...", error);
     try {
-      // Attempt 2: Gemini 3 Pro Image Preview with Retry. Increase retries to 5 and delay to 5s.
       return await withRetry(() => callModel('gemini-3-pro-image-preview'), 5, 5000);
     } catch (finalError) {
       throw new Error(parseGeminiError(finalError));
@@ -167,7 +199,7 @@ export const editImage = async (imageBase64: string, imageMimeType: string, prom
   }
 };
 
-// 3. Transcribe Audio (Gemini 2.5 Flash -> Retry)
+// 5. Transcribe Audio (Gemini 2.5 Flash -> Retry)
 export const transcribeAudio = async (audioBase64: string, mimeType: string): Promise<string> => {
   const ai = getClient();
   
@@ -191,7 +223,7 @@ export const transcribeAudio = async (audioBase64: string, mimeType: string): Pr
   }
 };
 
-// 4. Text to Speech (Gemini 2.5 Flash TTS -> Retry)
+// 6. Text to Speech (Gemini 2.5 Flash TTS -> Retry)
 export const generateSpeech = async (text: string): Promise<string> => {
   const ai = getClient();
   
