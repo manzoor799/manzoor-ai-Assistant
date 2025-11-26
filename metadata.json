@@ -1,0 +1,7 @@
+{
+  "name": "Manzoor AI",
+  "description": "An Urdu-first multimodal AI assistant powered by Gemini. Features real-time voice conversation, image editing, audio transcription, and text-to-speech.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
