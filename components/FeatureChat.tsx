@@ -24,16 +24,10 @@ export const FeatureChat: React.FC<FeatureChatProps> = ({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const audioCtxRef = useRef<AudioContext | null>(null);
 
   // Colors
   const bgColor = `bg-${accentColor}-600`;
-  const bgLight = `bg-${accentColor}-50`;
-  const textColor = `text-${accentColor}-700`;
-  const ringColor = `ring-${accentColor}-200`;
-
-  // Determine dynamic classes (Tailwind safe-list needed or style injection, using simple approximations for demo)
-  // For simplicity, we will stick to a few standard colors or pass them via props if strictly needed.
-  // Assuming generic color 'indigo' for now or mapping specific ones.
   const getTheme = () => {
       switch(accentColor) {
           case 'green': return { bg: 'bg-green-600', light: 'bg-green-50', text: 'text-green-700', ring: 'ring-green-200', btn: 'hover:bg-green-700' };
@@ -41,6 +35,9 @@ export const FeatureChat: React.FC<FeatureChatProps> = ({
           case 'blue': return { bg: 'bg-blue-600', light: 'bg-blue-50', text: 'text-blue-700', ring: 'ring-blue-200', btn: 'hover:bg-blue-700' };
           case 'purple': return { bg: 'bg-purple-600', light: 'bg-purple-50', text: 'text-purple-700', ring: 'ring-purple-200', btn: 'hover:bg-purple-700' };
           case 'orange': return { bg: 'bg-orange-600', light: 'bg-orange-50', text: 'text-orange-700', ring: 'ring-orange-200', btn: 'hover:bg-orange-700' };
+          case 'teal': return { bg: 'bg-teal-600', light: 'bg-teal-50', text: 'text-teal-700', ring: 'ring-teal-200', btn: 'hover:bg-teal-700' };
+          case 'rose': return { bg: 'bg-rose-600', light: 'bg-rose-50', text: 'text-rose-700', ring: 'ring-rose-200', btn: 'hover:bg-rose-700' };
+          case 'pink': return { bg: 'bg-pink-600', light: 'bg-pink-50', text: 'text-pink-700', ring: 'ring-pink-200', btn: 'hover:bg-pink-700' };
           default: return { bg: 'bg-indigo-600', light: 'bg-indigo-50', text: 'text-indigo-700', ring: 'ring-indigo-200', btn: 'hover:bg-indigo-700' };
       }
   };
@@ -54,11 +51,31 @@ export const FeatureChat: React.FC<FeatureChatProps> = ({
     scrollToBottom();
   }, [history, status.isLoading]);
 
+  // Cleanup audio on unmount
+  useEffect(() => {
+    return () => {
+        if (audioCtxRef.current) {
+            audioCtxRef.current.close();
+            audioCtxRef.current = null;
+        }
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+            mediaRecorderRef.current.stop();
+            mediaRecorderRef.current.stream.getTracks().forEach(t => t.stop());
+        }
+    };
+  }, []);
+
   // Audio Playback Logic
   const playAudio = async (text: string) => {
       try {
+          // Close previous context if exists to stop overlapping audio
+          if (audioCtxRef.current) {
+              await audioCtxRef.current.close();
+          }
           const audioBase64 = await generateSpeech(text);
           const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+          audioCtxRef.current = audioCtx;
+          
           const audioBuffer = await decodeAudioData(base64ToUint8Array(audioBase64), audioCtx, 24000, 1);
           const source = audioCtx.createBufferSource();
           source.buffer = audioBuffer;
@@ -82,10 +99,7 @@ export const FeatureChat: React.FC<FeatureChatProps> = ({
     try {
       const responseText = await chatWithPersona(history, userText, systemInstruction);
       setHistory(prev => [...prev, { role: 'model', text: responseText }]);
-      
-      // Auto-play TTS for accessibility
       playAudio(responseText);
-
     } catch (err: any) {
       setStatus({ isLoading: false, error: err.message });
     } finally {
@@ -110,16 +124,9 @@ export const FeatureChat: React.FC<FeatureChatProps> = ({
                   const text = await transcribeAudio(base64, 'audio/webm');
                   if (text.trim()) {
                       handleSend(text);
-                  } else {
-                      setStatus({ isLoading: false, error: "Could not hear anything." });
                   }
               } catch (e: any) {
                   setStatus({ isLoading: false, error: e.message });
-              } finally {
-                  // Only clear loading if we didn't call handleSend (which sets loading again)
-                  // Actually handleSend sets loading=true, so if we called it, we are good.
-                  // If we didn't, we need to clear.
-                  // Simpler: handleSend manages its own state, so if we fail before calling it:
               }
               stream.getTracks().forEach(t => t.stop());
           };

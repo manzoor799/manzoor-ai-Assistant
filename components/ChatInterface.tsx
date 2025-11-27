@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { chatWithManzoor } from '../services/geminiService';
+import { chatWithManzoor, transcribeAudio } from '../services/geminiService';
 import { ChatMessage, ProcessingState } from '../types';
-import { IconSend, IconImage } from './icons';
+import { IconSend, IconImage, IconMic } from './icons';
 import { convertBlobToBase64 } from '../utils/audioUtils';
 
 export const ChatInterface: React.FC = () => {
@@ -9,8 +9,11 @@ export const ChatInterface: React.FC = () => {
   const [input, setInput] = useState('');
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [status, setStatus] = useState<ProcessingState>({ isLoading: false, error: null });
+  const [isRecording, setIsRecording] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -19,6 +22,16 @@ export const ChatInterface: React.FC = () => {
   useEffect(() => {
     scrollToBottom();
   }, [history, status.isLoading, status.error]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+        mediaRecorderRef.current.stop();
+        mediaRecorderRef.current.stream.getTracks().forEach(t => t.stop());
+      }
+    };
+  }, []);
 
   const handleSend = async () => {
     if ((!input.trim() && !selectedImage) || status.isLoading) return;
@@ -55,10 +68,45 @@ export const ChatInterface: React.FC = () => {
       const responseText = await chatWithManzoor(history, userText, imageBase64, imageMimeType);
       setHistory(prev => [...prev, { role: 'model', text: responseText }]);
     } catch (err: any) {
-      // The service now returns a clean error message string, so we can display it directly
       setStatus({ isLoading: false, error: err.message });
     } finally {
       setStatus(prev => ({ ...prev, isLoading: false }));
+    }
+  };
+
+  const handleRecording = async () => {
+    if (isRecording) {
+      mediaRecorderRef.current?.stop();
+      setIsRecording(false);
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => audioChunksRef.current.push(event.data);
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        setStatus({ isLoading: true, error: null });
+        try {
+          const base64 = await convertBlobToBase64(audioBlob);
+          const text = await transcribeAudio(base64, 'audio/webm');
+          setInput(prev => prev + (prev ? ' ' : '') + text);
+        } catch (e: any) {
+          setStatus({ isLoading: false, error: "Dictation failed: " + e.message });
+        } finally {
+          setStatus(prev => ({ ...prev, isLoading: false }));
+        }
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch (e) {
+      setStatus({ isLoading: false, error: "Mic access denied" });
     }
   };
 
@@ -117,16 +165,7 @@ export const ChatInterface: React.FC = () => {
         )}
         {status.error && (
           <div className="mx-auto max-w-lg p-4 mb-4 text-red-800 border border-red-200 rounded-lg bg-red-50" role="alert">
-            <div className="flex items-center">
-              <svg className="flex-shrink-0 w-4 h-4 mr-2" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="currentColor" viewBox="0 0 20 20">
-                <path d="M10 .5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 10 .5ZM9.5 4a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3ZM12 15H8a1 1 0 0 1 0-2h1v-3H8a1 1 0 0 1 0-2h2a1 1 0 0 1 1 1v4h1a1 1 0 0 1 0 2Z"/>
-              </svg>
-              <span className="sr-only">Error</span>
-              <h3 className="text-sm font-medium">Unable to complete request</h3>
-            </div>
-            <div className="mt-2 mb-2 text-sm">
-              {status.error}
-            </div>
+             <span className="text-sm">{status.error}</span>
           </div>
         )}
         <div ref={messagesEndRef} />
@@ -161,9 +200,16 @@ export const ChatInterface: React.FC = () => {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyPress}
               placeholder="Type your message..."
-              className="w-full bg-gray-100 border-0 rounded-2xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all resize-none max-h-32 font-urdu"
+              className="w-full bg-gray-100 border-0 rounded-2xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all resize-none max-h-32 font-urdu pr-10"
               rows={1}
             />
+            {/* Mic button inside input area */}
+            <button 
+                onClick={handleRecording}
+                className={`absolute right-2 bottom-2 p-1.5 rounded-full transition-colors ${isRecording ? 'bg-red-500 text-white animate-pulse' : 'text-gray-400 hover:text-gray-600'}`}
+            >
+                <IconMic />
+            </button>
           </div>
           <button
             onClick={handleSend}

@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Modality, GenerateContentResponse } from "@google/genai";
 import { ChatMessage } from '../types';
 
@@ -25,60 +26,42 @@ async function withRetry<T>(
       lastError = err;
       const msg = err.message || err.toString();
       
-      // Check for retryable errors: 429 (Quota), 503 (Service Unavailable), 500 (Server Error)
+      // Check for retryable errors
       const isQuota = msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota');
       const isServer = msg.includes('503') || msg.includes('500') || msg.includes('Overloaded');
 
       if ((isQuota || isServer) && i < maxRetries - 1) {
-        const delay = initialDelay * Math.pow(2, i); // e.g. 5000, 10000, 20000 ms
-        console.warn(`Attempt ${i + 1} failed with ${isQuota ? 'quota' : 'server'} error. Retrying in ${delay}ms...`);
+        const delay = initialDelay * Math.pow(2, i);
+        console.warn(`Attempt ${i + 1} failed. Retrying in ${delay}ms...`);
         await wait(delay);
         continue;
       }
-      
-      // If it's not retryable (e.g. Safety, Invalid Argument), throw immediately
       throw err;
     }
   }
   throw lastError;
 };
 
-// Helper to parse ugly API errors into human readable text
+// Helper to parse ugly API errors
 const parseGeminiError = (err: any): string => {
   const msg = err.message || err.toString();
-  
-  if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota')) {
-    return "Usage limit exceeded. The system is busy, please wait a minute and try again.";
-  }
-  if (msg.includes('500') || msg.includes('Rpc failed') || msg.includes('xhr error')) {
-    return "Network error or image too large. Please try a smaller image.";
-  }
-  if (msg.includes('SAFETY')) {
-    return "The request was blocked due to safety settings.";
-  }
-
-  try {
-    const jsonMatch = msg.match(/\{.*"message":\s*"([^"]+)".*\}/);
-    if (jsonMatch && jsonMatch[1]) {
-        return jsonMatch[1];
-    }
-  } catch (e) {}
-
+  if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) return "Usage limit exceeded. Please wait a moment.";
+  if (msg.includes('500')) return "Network error. Please try again.";
   return "An error occurred. Please try again.";
 };
 
-// 1. Chat with Manzoor (Default Persona)
+// 1. Chat with Manzoor
 export const chatWithManzoor = async (history: ChatMessage[], newMessage: string, imageBase64?: string, imageMimeType: string = 'image/jpeg'): Promise<string> => {
   return chatWithPersona(
     history, 
     newMessage, 
-    "You are an AI assistant named Manzoor. Your father's name is Abdul Razak. You primarily speak Urdu, but can understand English. Be polite, helpful, and respectful. Use the Urdu script for Urdu responses.",
+    "You are Manzoor, an AI assistant. Your father is Abdul Razak. Speak Urdu (Urdu script) primarily. Be helpful and polite.",
     imageBase64,
     imageMimeType
   );
 };
 
-// 2. Chat with Persona (Specialized System Instruction)
+// 2. Chat with Persona
 export const chatWithPersona = async (history: ChatMessage[], newMessage: string, systemInstruction: string, imageBase64?: string, imageMimeType: string = 'image/jpeg'): Promise<string> => {
   const ai = getClient();
   
@@ -115,22 +98,21 @@ export const chatWithPersona = async (history: ChatMessage[], newMessage: string
 
   try {
     return await withRetry(callPro, 3, 2000);
-  } catch (err: any) {
-    console.warn("Pro failed, switching to Flash...", err);
+  } catch (err) {
+    console.warn("Pro failed, switching to Flash...");
     try {
       return await withRetry(callFlash, 3, 2000);
-    } catch (fallbackErr: any) {
+    } catch (fallbackErr) {
       throw new Error(parseGeminiError(fallbackErr));
     }
   }
 };
 
-// 3. Analyze Image (Vision Task - Crop Doctor, Doc Scanner)
+// 3. Analyze Image
 export const analyzeImage = async (imageBase64: string, mimeType: string, prompt: string, systemInstruction: string): Promise<string> => {
   const ai = getClient();
 
   const callVision = async () => {
-    // gemini-2.5-flash is excellent for multimodal understanding
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: {
@@ -139,9 +121,7 @@ export const analyzeImage = async (imageBase64: string, mimeType: string, prompt
           { text: prompt }
         ]
       },
-      config: {
-        systemInstruction
-      }
+      config: { systemInstruction }
     });
     return response.text || "";
   };
@@ -153,7 +133,7 @@ export const analyzeImage = async (imageBase64: string, mimeType: string, prompt
   }
 };
 
-// 4. Edit Image (Gemini 2.5 Flash Image -> Retry -> Fallback to 3.0 Pro Image -> Retry)
+// 4. Edit Image
 export const editImage = async (imageBase64: string, imageMimeType: string, prompt: string): Promise<{ image?: string, text?: string }> => {
   const ai = getClient();
 
@@ -171,26 +151,21 @@ export const editImage = async (imageBase64: string, imageMimeType: string, prom
     let resultImage: string | undefined;
     let resultText: string | undefined;
 
-    if (response.candidates && response.candidates[0].content && response.candidates[0].content.parts) {
+    if (response.candidates?.[0]?.content?.parts) {
       for (const part of response.candidates[0].content.parts) {
-        if (part.inlineData) {
-          resultImage = part.inlineData.data;
-        } else if (part.text) {
-          resultText = part.text;
-        }
+        if (part.inlineData) resultImage = part.inlineData.data;
+        else if (part.text) resultText = part.text;
       }
     }
 
-    if (!resultImage && !resultText) {
-        throw new Error("The model returned an empty response.");
-    }
+    if (!resultImage && !resultText) throw new Error("Empty response");
     return { image: resultImage, text: resultText };
   };
 
   try {
     return await withRetry(() => callModel('gemini-2.5-flash-image'), 5, 5000);
-  } catch (error: any) {
-    console.warn("Gemini 2.5 Flash Image failed, switching to 3 Pro...", error);
+  } catch (error) {
+    console.warn("Flash Image failed, switching to Pro...");
     try {
       return await withRetry(() => callModel('gemini-3-pro-image-preview'), 5, 5000);
     } catch (finalError) {
@@ -199,10 +174,9 @@ export const editImage = async (imageBase64: string, imageMimeType: string, prom
   }
 };
 
-// 5. Transcribe Audio (Gemini 2.5 Flash -> Retry)
+// 5. Transcribe Audio
 export const transcribeAudio = async (audioBase64: string, mimeType: string): Promise<string> => {
   const ai = getClient();
-  
   const callTranscribe = async () => {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
@@ -215,7 +189,6 @@ export const transcribeAudio = async (audioBase64: string, mimeType: string): Pr
     });
     return response.text || "";
   };
-
   try {
     return await withRetry(callTranscribe, 3, 2000);
   } catch (err) {
@@ -223,10 +196,9 @@ export const transcribeAudio = async (audioBase64: string, mimeType: string): Pr
   }
 };
 
-// 6. Text to Speech (Gemini 2.5 Flash TTS -> Retry)
+// 6. Text to Speech
 export const generateSpeech = async (text: string): Promise<string> => {
   const ai = getClient();
-  
   const callTTS = async () => {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-preview-tts',
@@ -234,18 +206,14 @@ export const generateSpeech = async (text: string): Promise<string> => {
       config: {
         responseModalities: [Modality.AUDIO],
         speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: 'Zephyr' }
-          }
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } }
         }
       }
     });
-
     const audioData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    if (!audioData) throw new Error("No audio data returned");
+    if (!audioData) throw new Error("No audio returned");
     return audioData;
   };
-
   try {
     return await withRetry(callTTS, 3, 2000);
   } catch (err) {

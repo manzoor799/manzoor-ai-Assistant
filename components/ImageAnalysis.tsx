@@ -1,11 +1,11 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { analyzeImage, generateSpeech } from '../services/geminiService';
 import { base64ToUint8Array, decodeAudioData } from '../utils/audioUtils';
-import { IconUpload, IconVolumeUp, IconPlant, IconDocument } from './icons';
+import { IconUpload, IconVolumeUp, IconPlant, IconDocument, IconVisual, IconMedicine, IconCow } from './icons';
 import { ProcessingState } from '../types';
 
 interface ImageAnalysisProps {
-  mode: 'CROPS' | 'DOCS' | 'HEALTH';
+  mode: 'CROPS' | 'DOCS' | 'HEALTH' | 'VISUAL' | 'LIVESTOCK';
 }
 
 export const ImageAnalysis: React.FC<ImageAnalysisProps> = ({ mode }) => {
@@ -14,6 +14,16 @@ export const ImageAnalysis: React.FC<ImageAnalysisProps> = ({ mode }) => {
   const [result, setResult] = useState<string>('');
   const [status, setStatus] = useState<ProcessingState>({ isLoading: false, error: null });
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+
+  // Cleanup audio
+  useEffect(() => {
+    return () => {
+        if (audioCtxRef.current) {
+            audioCtxRef.current.close();
+        }
+    };
+  }, []);
 
   const config = {
       CROPS: {
@@ -39,9 +49,27 @@ export const ImageAnalysis: React.FC<ImageAnalysisProps> = ({ mode }) => {
           subtitle: "دوا کی معلومات (Medicine Guide)",
           prompt: "Read this medicine label or prescription. Explain what the medicine is for and how to use it in simple Urdu.",
           systemInstruction: "You are a helpful medical assistant. Explain medicine usage simply and clearly in Urdu. Add safety disclaimers.",
-          icon: <IconDocument />, // reusing doc icon or health icon
+          icon: <IconMedicine />,
           placeholder: "Upload medicine label / دوا کی تصویر",
-          color: "red"
+          color: "pink"
+      },
+      VISUAL: {
+          title: "Visual Teacher",
+          subtitle: "یہ کیا ہے؟ (What is this?)",
+          prompt: "Identify the main object in this image and explain what it is in simple Urdu. Add a fun fact.",
+          systemInstruction: "You are a friendly teacher. Identify objects and explain them simply in Urdu to encourage learning.",
+          icon: <IconVisual />,
+          placeholder: "Take a photo of anything / تصویر لیں",
+          color: "violet"
+      },
+      LIVESTOCK: {
+          title: "Livestock Doctor",
+          subtitle: "مویشیوں کا ڈاکٹر (Animal Health)",
+          prompt: "Identify this animal and any visible symptoms of disease or injury. Provide a diagnosis and home remedy or treatment advice in simple Urdu. Warn if a vet is needed.",
+          systemInstruction: "You are a veterinary assistant. Diagnose animal health issues from photos and explain in simple Urdu.",
+          icon: <IconCow />,
+          placeholder: "Upload animal photo / جانور کی تصویر",
+          color: "orange"
       }
   }[mode];
 
@@ -51,12 +79,26 @@ export const ImageAnalysis: React.FC<ImageAnalysisProps> = ({ mode }) => {
       const reader = new FileReader();
       reader.onload = (event) => {
         const result = event.target?.result as string;
-        setSelectedImage(result.split(',')[1]); // remove data:image/...;base64,
+        setSelectedImage(result.split(',')[1]); 
         setMimeType(file.type);
         setResult('');
       };
       reader.readAsDataURL(file);
     }
+  };
+
+  const playAudio = async (text: string) => {
+      try {
+        if (audioCtxRef.current) await audioCtxRef.current.close();
+        const audioBase64 = await generateSpeech(text);
+        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+        audioCtxRef.current = audioCtx;
+        const audioBuffer = await decodeAudioData(base64ToUint8Array(audioBase64), audioCtx, 24000, 1);
+        const source = audioCtx.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(audioCtx.destination);
+        source.start();
+      } catch (e) { console.error("TTS failed", e); }
   };
 
   const handleAnalyze = async () => {
@@ -66,18 +108,7 @@ export const ImageAnalysis: React.FC<ImageAnalysisProps> = ({ mode }) => {
     try {
         const text = await analyzeImage(selectedImage, mimeType, config.prompt, config.systemInstruction);
         setResult(text);
-        
-        // Auto-play audio
-        try {
-            const audioBase64 = await generateSpeech(text);
-            const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-            const audioBuffer = await decodeAudioData(base64ToUint8Array(audioBase64), audioCtx, 24000, 1);
-            const source = audioCtx.createBufferSource();
-            source.buffer = audioBuffer;
-            source.connect(audioCtx.destination);
-            source.start();
-        } catch (e) { console.error("TTS failed", e); }
-
+        playAudio(text);
     } catch (err: any) {
         setStatus({ isLoading: false, error: err.message });
     } finally {
@@ -133,14 +164,15 @@ export const ImageAnalysis: React.FC<ImageAnalysisProps> = ({ mode }) => {
             <div className="w-full max-w-md bg-gray-50 p-6 rounded-2xl border border-gray-200 shadow-sm">
                 <div className="flex justify-between items-start mb-4">
                     <h3 className="font-bold text-gray-700 uppercase text-xs tracking-wider">Diagnosis / Result</h3>
-                    <IconVolumeUp />
+                    <button onClick={() => playAudio(result)} className="text-gray-500 hover:text-indigo-600">
+                        <IconVolumeUp />
+                    </button>
                 </div>
                 <p className="font-urdu text-xl leading-loose text-gray-800 whitespace-pre-wrap">
                     {result}
                 </p>
             </div>
         )}
-
       </div>
     </div>
   );

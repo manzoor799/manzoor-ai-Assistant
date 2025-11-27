@@ -1,3 +1,4 @@
+
 export enum AppMode {
   DASHBOARD = 'DASHBOARD',
   CHAT = 'CHAT',
@@ -5,14 +6,27 @@ export enum AppMode {
   IMAGE_EDIT = 'IMAGE_EDIT',
   TRANSCRIBE = 'TRANSCRIBE',
   TTS = 'TTS',
-  // New Modes
+  // Existing Modes
   FORMS = 'FORMS',
   DOCS = 'DOCS',
   CROPS = 'CROPS',
   FARMING = 'FARMING',
   HEALTH = 'HEALTH',
+  MEDICINE = 'MEDICINE',
   EDUCATION = 'EDUCATION',
-  UTILITIES = 'UTILITIES'
+  VISUAL = 'VISUAL',
+  FINANCE = 'FINANCE',
+  LEGAL = 'LEGAL',
+  UTILITIES = 'UTILITIES',
+  LIVESTOCK = 'LIVESTOCK',
+  JOBS = 'JOBS',
+  NEWS = 'NEWS',
+  // New Missing Modes
+  SHOPPING = 'SHOPPING',
+  REMINDERS = 'REMINDERS',
+  CULTURE = 'CULTURE',
+  WOMEN = 'WOMEN',
+  PROFILE = 'PROFILE'
 }
 
 export interface ChatMessage {
